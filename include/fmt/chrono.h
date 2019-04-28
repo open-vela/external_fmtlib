@@ -585,20 +585,18 @@ struct formatter<std::chrono::duration<Rep, Period>, Char> {
     }
   };
 
-  typedef typename basic_parse_context<Char>::iterator iterator;
-  struct parse_range {
-    iterator begin;
-    iterator end;
-  };
+ public:
+  formatter() : spec(), precision(-1) {}
 
-  FMT_CONSTEXPR parse_range do_parse(basic_parse_context<Char>& ctx) {
+  FMT_CONSTEXPR auto parse(basic_parse_context<Char>& ctx)
+      -> decltype(ctx.begin()) {
     auto begin = ctx.begin(), end = ctx.end();
-    if (begin == end) return {begin, end};
+    if (begin == end) return begin;
     spec_handler handler{*this, ctx, format_str};
     begin = internal::parse_align(begin, end, handler);
-    if (begin == end) return {begin, end};
+    if (begin == end) return begin;
     begin = internal::parse_width(begin, end, handler);
-    if (begin == end) return {begin, end};
+    if (begin == end) return begin;
     if (*begin == '.') {
       if (std::is_floating_point<Rep>::value)
         begin = internal::parse_precision(begin, end, handler);
@@ -606,18 +604,9 @@ struct formatter<std::chrono::duration<Rep, Period>, Char> {
         handler.on_error("precision not allowed for this argument type");
     }
     end = parse_chrono_format(begin, end, internal::chrono_format_checker());
-    return {begin, end};
-  }
-
- public:
-  formatter() : spec(), precision(-1) {}
-
-  FMT_CONSTEXPR auto parse(basic_parse_context<Char>& ctx)
-      -> decltype(ctx.begin()) {
-    auto range = do_parse(ctx);
-    format_str = basic_string_view<Char>(
-        &*range.begin, internal::to_unsigned(range.end - range.begin));
-    return range.end;
+    format_str =
+        basic_string_view<Char>(&*begin, internal::to_unsigned(end - begin));
+    return end;
   }
 
   template <typename FormatContext>
