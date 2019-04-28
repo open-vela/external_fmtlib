@@ -494,12 +494,10 @@ enum result {
 };
 }
 
-// Generates output using the Grisu digit-gen algorithm.
-// error: the size of the region (lower, upper) outside of which numbers
-// definitely do not round to value (Delta in Grisu3).
+// Generates output using Grisu2 digit-gen algorithm.
 template <typename Handler>
-digits::result grisu_gen_digits(fp value, uint64_t error, int& exp,
-                                Handler& handler) {
+digits::result grisu2_gen_digits(fp value, uint64_t error, int& exp,
+                                 Handler& handler) {
   fp one(1ull << -value.e, value.e);
   // The integral part of scaled value (p1 in Grisu) = value / one. It cannot be
   // zero because it contains a product of two 64-bit numbers with MSB set (due
@@ -637,57 +635,34 @@ struct fixed_handler {
 };
 
 // The shortest representation digit handler.
-template <int GRISU_VERSION> struct grisu_shortest_handler {
+struct shortest_handler {
   char* buf;
   int size;
-  // Distance between scaled value and upper bound (wp_W in Grisu3).
-  uint64_t diff;
+  fp diff;  // wp_w in Grisu.
 
   digits::result on_start(uint64_t, uint64_t, uint64_t, int&) {
     return digits::more;
   }
-
-  // This implements Grisu3's round_weed.
   digits::result on_digit(char digit, uint64_t divisor, uint64_t remainder,
                           uint64_t error, int exp, bool integral) {
     buf[size++] = digit;
-    if (remainder >= error) return digits::more;
-    if (GRISU_VERSION != 3) {
-      uint64_t d = integral ? diff : diff * data::POWERS_OF_10_64[-exp];
-      while (remainder < d && error - remainder >= divisor &&
-             (remainder + divisor < d ||
-              d - remainder > remainder + divisor - d)) {
-        --buf[size - 1];
-        remainder += divisor;
-      }
-      return digits::done;
-    }
-    uint64_t unit = integral ? 1 : data::POWERS_OF_10_64[-exp];
-    uint64_t up = diff + unit;  // wp_Wup
-    while (remainder < up && error - remainder >= divisor &&
-           (remainder + divisor < up ||
-            up - remainder > remainder + divisor - up)) {
+    if (remainder > error) return digits::more;
+    uint64_t d = integral ? diff.f : diff.f * data::POWERS_OF_10_64[-exp];
+    while (
+        remainder < d && error - remainder >= divisor &&
+        (remainder + divisor < d || d - remainder > remainder + divisor - d)) {
       --buf[size - 1];
       remainder += divisor;
     }
-    uint64_t down = diff - unit;  // wp_Wdown
-    if (remainder < down && error - remainder >= divisor &&
-        (remainder + divisor < down ||
-         down - remainder > remainder + divisor - down)) {
-      return digits::error;
-    }
-    return 2 * unit <= remainder && remainder <= error - 4 * unit
-               ? digits::done
-               : digits::error;
+    return digits::done;
   }
 };
 
 template <typename Double, typename std::enable_if<
                                sizeof(Double) == sizeof(uint64_t), int>::type>
-FMT_FUNC bool grisu_format(Double value, buffer<char>& buf, int precision,
-                           unsigned options, int& exp) {
+FMT_FUNC bool grisu2_format(Double value, buffer<char>& buf, int precision,
+                            bool fixed, int& exp) {
   FMT_ASSERT(value >= 0, "value is negative");
-  bool fixed = (options & grisu_options::fixed) != 0;
   if (value <= 0) {  // <= instead of == to silence a warning.
     if (precision < 0 || !fixed) {
       exp = 0;
@@ -710,7 +685,7 @@ FMT_FUNC bool grisu_format(Double value, buffer<char>& buf, int precision,
         min_exp - (fp_value.e + fp::significand_size), cached_exp10);
     fp_value = fp_value * cached_pow;
     fixed_handler handler{buf.data(), 0, precision, -cached_exp10, fixed};
-    if (grisu_gen_digits(fp_value, 1, exp, handler) == digits::error)
+    if (grisu2_gen_digits(fp_value, 1, exp, handler) == digits::error)
       return false;
     buf.resize(to_unsigned(handler.size));
   } else {
@@ -720,29 +695,17 @@ FMT_FUNC bool grisu_format(Double value, buffer<char>& buf, int precision,
     // the exponent in the range [min_exp, -32].
     auto cached_pow = get_cached_power(  // \tilde{c}_{-k} in Grisu.
         min_exp - (upper.e + fp::significand_size), cached_exp10);
+    upper = upper * cached_pow;  // \tilde{M}^+ in Grisu.
+    --upper.f;                   // \tilde{M}^+ - 1 ulp -> M^+_{\downarrow}.
+    assert(min_exp <= upper.e && upper.e <= -32);
     fp_value.normalize();
     fp_value = fp_value * cached_pow;
     lower = lower * cached_pow;  // \tilde{M}^- in Grisu.
-    upper = upper * cached_pow;  // \tilde{M}^+ in Grisu.
-    assert(min_exp <= upper.e && upper.e <= -32);
-    auto result = digits::result();
-    int size = 0;
-    if ((options & grisu_options::grisu3) != 0) {
-      --lower.f;  // \tilde{M}^- - 1 ulp -> M^-_{\downarrow}.
-      ++upper.f;  // \tilde{M}^+ + 1 ulp -> M^+_{\uparrow}.
-      // Numbers outside of (lower, upper) definitely do not round to value.
-      grisu_shortest_handler<3> handler{buf.data(), 0, (upper - fp_value).f};
-      result = grisu_gen_digits(upper, upper.f - lower.f, exp, handler);
-      size = handler.size;
-    } else {
-      ++lower.f;  // \tilde{M}^- + 1 ulp -> M^-_{\uparrow}.
-      --upper.f;  // \tilde{M}^+ - 1 ulp -> M^+_{\downarrow}.
-      grisu_shortest_handler<2> handler{buf.data(), 0, (upper - fp_value).f};
-      result = grisu_gen_digits(upper, upper.f - lower.f, exp, handler);
-      size = handler.size;
-    }
+    ++lower.f;                   // \tilde{M}^- + 1 ulp -> M^-_{\uparrow}.
+    shortest_handler handler{buf.data(), 0, upper - fp_value};
+    auto result = grisu2_gen_digits(upper, upper.f - lower.f, exp, handler);
     if (result == digits::error) return false;
-    buf.resize(to_unsigned(size));
+    buf.resize(to_unsigned(handler.size));
   }
   exp -= cached_exp10;
   return true;

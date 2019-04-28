@@ -137,10 +137,10 @@ TEST(FPTest, FixedHandler) {
             digits::error);
 }
 
-TEST(FPTest, GrisuFormatCompilesWithNonIEEEDouble) {
+TEST(FPTest, Grisu2FormatCompilesWithNonIEEEDouble) {
   fmt::memory_buffer buf;
   int exp = 0;
-  grisu_format(4.2f, buf, -1, false, exp);
+  grisu2_format(4.2f, buf, -1, false, exp);
 }
 
 template <typename T> struct ValueExtractor : fmt::internal::function<T> {
