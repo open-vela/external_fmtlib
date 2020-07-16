@@ -24,7 +24,8 @@ class custom_arg_formatter
 
   custom_arg_formatter(fmt::format_context& ctx,
                        fmt::format_parse_context* parse_ctx,
-                       fmt::format_specs* s = nullptr, const char* = nullptr)
+                       fmt::format_specs* s = nullptr,
+                       const char* = nullptr)
       : base(ctx, parse_ctx, s) {}
 
   using base::operator();
@@ -38,9 +39,10 @@ class custom_arg_formatter
 
 std::string custom_vformat(fmt::string_view format_str, fmt::format_args args) {
   fmt::memory_buffer buffer;
+  fmt::detail::buffer<char>& base = buffer;
   // Pass custom argument formatter as a template arg to vwrite.
-  fmt::vformat_to<custom_arg_formatter>(
-      fmt::detail::buffer_appender<char>(buffer), format_str, args);
+  fmt::vformat_to<custom_arg_formatter>(std::back_inserter(base), format_str,
+                                        args);
   return std::string(buffer.data(), buffer.size());
 }
 
