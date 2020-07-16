@@ -49,26 +49,16 @@ template <class Char> class formatbuf : public std::basic_streambuf<Char> {
   }
 };
 
-struct converter {
-  template <typename T, FMT_ENABLE_IF(is_integral<T>::value)> converter(T);
-};
-
 template <typename Char> struct test_stream : std::basic_ostream<Char> {
  private:
-  void_t<> operator<<(converter);
-};
+  // Hide all operator<< from std::basic_ostream<Char>.
+  void_t<> operator<<(null<>);
+  void_t<> operator<<(const Char*);
 
-// Hide insertion operators for built-in types.
-template <typename Char, typename Traits>
-void_t<> operator<<(std::basic_ostream<Char, Traits>&, Char);
-template <typename Char, typename Traits>
-void_t<> operator<<(std::basic_ostream<Char, Traits>&, char);
-template <typename Traits>
-void_t<> operator<<(std::basic_ostream<char, Traits>&, char);
-template <typename Traits>
-void_t<> operator<<(std::basic_ostream<char, Traits>&, signed char);
-template <typename Traits>
-void_t<> operator<<(std::basic_ostream<char, Traits>&, unsigned char);
+  template <typename T, FMT_ENABLE_IF(std::is_convertible<T, int>::value &&
+                                      !std::is_enum<T>::value)>
+  void_t<> operator<<(T);
+};
 
 // Checks if T has a user-defined operator<< (e.g. not a member of
 // std::ostream).
@@ -113,7 +103,7 @@ void format_value(buffer<Char>& buf, const T& value,
 #endif
   output << value;
   output.exceptions(std::ios_base::failbit | std::ios_base::badbit);
-  buf.try_resize(buf.size());
+  buf.resize(buf.size());
 }
 
 // Formats an object of type T that has an overloaded ostream operator<<.
@@ -170,7 +160,7 @@ template <typename S, typename... Args,
           typename Char = enable_if_t<detail::is_string<S>::value, char_t<S>>>
 void print(std::basic_ostream<Char>& os, const S& format_str, Args&&... args) {
   vprint(os, to_string_view(format_str),
-         fmt::make_args_checked<Args...>(format_str, args...));
+         detail::make_args_checked<Args...>(format_str, args...));
 }
 FMT_END_NAMESPACE
 

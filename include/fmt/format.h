@@ -163,14 +163,6 @@ FMT_END_NAMESPACE
 #  define FMT_USE_LONG_DOUBLE 1
 #endif
 
-// Defining FMT_REDUCE_INT_INSTANTIATIONS to 1, will reduce the number of
-// int_writer template instances to just one by only using the largest integer
-// type. This results in a reduction in binary size but will cause a decrease in
-// integer formatting performance.
-#if !defined(FMT_REDUCE_INT_INSTANTIATIONS)
-#  define FMT_REDUCE_INT_INSTANTIATIONS 0
-#endif
-
 // __builtin_clz is broken in clang with Microsoft CodeGen:
 // https://github.com/fmtlib/fmt/issues/519
 #if (FMT_GCC_VERSION || FMT_HAS_BUILTIN(__builtin_clz)) && !FMT_MSC_VER
@@ -291,9 +283,6 @@ template <typename T> constexpr T max_value() {
 template <typename T> constexpr int num_bits() {
   return std::numeric_limits<T>::digits;
 }
-// std::numeric_limits<T>::digits may return 0 for 128-bit ints.
-template <> constexpr int num_bits<int128_t>() { return 128; }
-template <> constexpr int num_bits<uint128_t>() { return 128; }
 template <> constexpr int num_bits<fallback_uintptr>() {
   return static_cast<int>(sizeof(void*) *
                           std::numeric_limits<unsigned char>::digits);
@@ -306,10 +295,49 @@ FMT_INLINE void assume(bool condition) {
 #endif
 }
 
+// A workaround for gcc 4.8 to make void_t work in a SFINAE context.
+template <typename... Ts> struct void_t_impl { using type = void; };
+
+template <typename... Ts>
+using void_t = typename detail::void_t_impl<Ts...>::type;
+
 // An approximation of iterator_t for pre-C++20 systems.
 template <typename T>
 using iterator_t = decltype(std::begin(std::declval<T&>()));
 template <typename T> using sentinel_t = decltype(std::end(std::declval<T&>()));
+
+// Detect the iterator category of *any* given type in a SFINAE-friendly way.
+// Unfortunately, older implementations of std::iterator_traits are not safe
+// for use in a SFINAE-context.
+template <typename It, typename Enable = void>
+struct iterator_category : std::false_type {};
+
+template <typename T> struct iterator_category<T*> {
+  using type = std::random_access_iterator_tag;
+};
+
+template <typename It>
+struct iterator_category<It, void_t<typename It::iterator_category>> {
+  using type = typename It::iterator_category;
+};
+
+// Detect if *any* given type models the OutputIterator concept.
+template <typename It> class is_output_iterator {
+  // Check for mutability because all iterator categories derived from
+  // std::input_iterator_tag *may* also meet the requirements of an
+  // OutputIterator, thereby falling into the category of 'mutable iterators'
+  // [iterator.requirements.general] clause 4. The compiler reveals this
+  // property only at the point of *actually dereferencing* the iterator!
+  template <typename U>
+  static decltype(*(std::declval<U>())) test(std::input_iterator_tag);
+  template <typename U> static char& test(std::output_iterator_tag);
+  template <typename U> static const char& test(...);
+
+  using type = decltype(test<It>(typename iterator_category<It>::type{}));
+
+ public:
+  enum { value = !std::is_const<remove_reference_t<type>>::value };
+};
 
 // A workaround for std::string not having mutable data() until C++17.
 template <typename Char> inline Char* get_data(std::basic_string<Char>& s) {
@@ -343,27 +371,8 @@ reserve(std::back_insert_iterator<Container> it, size_t n) {
   return make_checked(get_data(c) + size, n);
 }
 
-template <typename T>
-inline buffer_appender<T> reserve(buffer_appender<T> it, size_t n) {
-  buffer<T>& buf = get_container(it);
-  buf.try_reserve(buf.size() + n);
-  return it;
-}
-
 template <typename Iterator> inline Iterator& reserve(Iterator& it, size_t) {
   return it;
-}
-
-template <typename T, typename OutputIt>
-constexpr T* to_pointer(OutputIt, size_t) {
-  return nullptr;
-}
-template <typename T> T* to_pointer(buffer_appender<T> it, size_t n) {
-  buffer<T>& buf = get_container(it);
-  auto size = buf.size();
-  if (buf.capacity() < size + n) return nullptr;
-  buf.try_resize(size + n);
-  return buf.data() + size;
 }
 
 template <typename Container, FMT_ENABLE_IF(is_contiguous<Container>::value)>
@@ -555,21 +564,11 @@ template <typename T> constexpr bool use_grisu() {
 template <typename T>
 template <typename U>
 void buffer<T>::append(const U* begin, const U* end) {
-  do {
-    auto count = to_unsigned(end - begin);
-    try_reserve(size_ + count);
-    auto free_cap = capacity_ - size_;
-    if (free_cap < count) count = free_cap;
-    std::uninitialized_copy_n(begin, count, make_checked(ptr_ + size_, count));
-    size_ += count;
-    begin += count;
-  } while (begin != end);
-}
-
-template <typename OutputIt, typename T, typename Traits>
-void iterator_buffer<OutputIt, T, Traits>::flush() {
-  out_ = std::copy_n(data_, this->limit(this->size()), out_);
-  this->clear();
+  size_t new_size = size_ + to_unsigned(end - begin);
+  reserve(new_size);
+  std::uninitialized_copy(begin, end,
+                          make_checked(ptr_ + size_, capacity_ - size_));
+  size_ = new_size;
 }
 }  // namespace detail
 
@@ -622,7 +621,7 @@ class basic_memory_buffer : public detail::buffer<T> {
   }
 
  protected:
-  void grow(size_t size) final;
+  void grow(size_t size) FMT_OVERRIDE;
 
  public:
   using value_type = T;
@@ -632,7 +631,7 @@ class basic_memory_buffer : public detail::buffer<T> {
       : alloc_(alloc) {
     this->set(store_, SIZE);
   }
-  ~basic_memory_buffer() { deallocate(); }
+  ~basic_memory_buffer() FMT_OVERRIDE { deallocate(); }
 
  private:
   // Move data from other to this buffer.
@@ -676,15 +675,6 @@ class basic_memory_buffer : public detail::buffer<T> {
 
   // Returns a copy of the allocator associated with this buffer.
   Allocator get_allocator() const { return alloc_; }
-
-  /**
-    Resizes the buffer to contain *count* elements. If T is a POD type new
-    elements may not be initialized.
-   */
-  void resize(size_t count) { this->try_resize(count); }
-
-  /** Increases the buffer capacity to *new_capacity*. */
-  void reserve(size_t new_capacity) { this->try_reserve(new_capacity); }
 };
 
 template <typename T, size_t SIZE, typename Allocator>
@@ -749,19 +739,12 @@ FMT_CONSTEXPR bool is_supported_floating_point(T) {
          (std::is_same<T, long double>::value && FMT_USE_LONG_DOUBLE);
 }
 
-#if FMT_REDUCE_INT_INSTANTIATIONS
-// Pick the largest integer container to represent all values of T.
-template <typename T>
-using uint32_or_64_or_128_t =
-    conditional_t<sizeof(uint128_t) < sizeof(uint64_t), uint64_t, uint128_t>;
-#else
 // Smallest of uint32_t, uint64_t, uint128_t that is large enough to
 // represent all values of T.
 template <typename T>
 using uint32_or_64_or_128_t = conditional_t<
-    num_bits<T>() <= 32, uint32_t,
-    conditional_t<num_bits<T>() <= 64, uint64_t, uint128_t>>;
-#endif
+    std::numeric_limits<T>::digits <= 32, uint32_t,
+    conditional_t<std::numeric_limits<T>::digits <= 64, uint64_t, uint128_t>>;
 
 // Static data is placed in this class template for the header-only config.
 template <typename T = void> struct FMT_EXTERN_TEMPLATE_API basic_data {
@@ -1576,7 +1559,7 @@ template <typename OutputIt, typename Char, typename UInt> struct int_writer {
     int num_digits = count_digits(abs_value);
     int size = num_digits, n = num_digits;
     std::string::const_iterator group = groups.cbegin();
-    while (group != groups.cend() && n > *group && *group > 0 &&
+    while (group != groups.cend() && num_digits > *group && *group > 0 &&
            *group != max_value<char>()) {
       size += sep_size;
       n -= *group;
@@ -1757,13 +1740,6 @@ OutputIt write(OutputIt out, basic_string_view<Char> value) {
   return base_iterator(out, it);
 }
 
-template <typename Char>
-buffer_appender<Char> write(buffer_appender<Char> out,
-                            basic_string_view<Char> value) {
-  get_container(out).append(value.begin(), value.end());
-  return out;
-}
-
 template <typename Char, typename OutputIt, typename T,
           FMT_ENABLE_IF(is_integral<T>::value &&
                         !std::is_same<T, bool>::value &&
@@ -1774,13 +1750,7 @@ OutputIt write(OutputIt out, T value) {
   // Don't do -abs_value since it trips unsigned-integer-overflow sanitizer.
   if (negative) abs_value = ~abs_value + 1;
   int num_digits = count_digits(abs_value);
-  auto size = (negative ? 1 : 0) + static_cast<size_t>(num_digits);
-  auto it = reserve(out, size);
-  if (auto ptr = to_pointer<Char>(it, size)) {
-    if (negative) *ptr++ = static_cast<Char>('-');
-    format_decimal<Char>(ptr, abs_value, num_digits);
-    return out;
-  }
+  auto it = reserve(out, (negative ? 1 : 0) + static_cast<size_t>(num_digits));
   if (negative) *it++ = static_cast<Char>('-');
   it = format_decimal<Char>(it, abs_value, num_digits).end;
   return base_iterator(out, it);
@@ -2963,7 +2933,7 @@ class arg_formatter : public arg_formatter_base<OutputIt, Char> {
 
 template <typename OutputIt, typename Char>
 using arg_formatter FMT_DEPRECATED_ALIAS =
-    detail::arg_formatter<OutputIt, Char>;
+  detail::arg_formatter<OutputIt, Char>;
 
 /**
  An error returned by an operating system or a language runtime,
@@ -3420,14 +3390,15 @@ arg_join<It, Sentinel, wchar_t> join(It begin, Sentinel end, wstring_view sep) {
   \endrst
  */
 template <typename Range>
-arg_join<detail::iterator_t<Range>, detail::sentinel_t<Range>, char> join(
-    Range&& range, string_view sep) {
+arg_join<detail::iterator_t<const Range>, detail::sentinel_t<const Range>, char>
+join(const Range& range, string_view sep) {
   return join(std::begin(range), std::end(range), sep);
 }
 
 template <typename Range>
-arg_join<detail::iterator_t<Range>, detail::sentinel_t<Range>, wchar_t> join(
-    Range&& range, wstring_view sep) {
+arg_join<detail::iterator_t<const Range>, detail::sentinel_t<const Range>,
+         wchar_t>
+join(const Range& range, wstring_view sep) {
   return join(std::begin(range), std::end(range), sep);
 }
 
@@ -3474,11 +3445,12 @@ std::basic_string<Char> to_string(const basic_memory_buffer<Char, SIZE>& buf) {
 }
 
 template <typename Char>
-detail::buffer_appender<Char> detail::vformat_to(
+typename buffer_context<Char>::iterator detail::vformat_to(
     detail::buffer<Char>& buf, basic_string_view<Char> format_str,
     basic_format_args<buffer_context<type_identity_t<Char>>> args) {
   using af = arg_formatter<typename buffer_context<Char>::iterator, Char>;
-  return vformat_to<af>(buffer_appender<Char>(buf), format_str, args);
+  return vformat_to<af>(std::back_inserter(buf), to_string_view(format_str),
+                        args);
 }
 
 #ifndef FMT_HEADER_ONLY
@@ -3520,8 +3492,10 @@ template <typename S, typename... Args, size_t SIZE = inline_buffer_size,
           typename Char = enable_if_t<detail::is_string<S>::value, char_t<S>>>
 inline typename buffer_context<Char>::iterator format_to(
     basic_memory_buffer<Char, SIZE>& buf, const S& format_str, Args&&... args) {
-  const auto& vargs = fmt::make_args_checked<Args...>(format_str, args...);
-  return detail::vformat_to(buf, to_string_view(format_str), vargs);
+  detail::check_format_string<Args...>(format_str);
+  using context = buffer_context<Char>;
+  return detail::vformat_to(buf, to_string_view(format_str),
+                            make_format_args<context>(args...));
 }
 
 template <typename OutputIt, typename Char = char>
@@ -3530,17 +3504,88 @@ using format_context_t = basic_format_context<OutputIt, Char>;
 template <typename OutputIt, typename Char = char>
 using format_args_t = basic_format_args<format_context_t<OutputIt, Char>>;
 
-template <typename OutputIt, typename Char = typename OutputIt::value_type>
-using format_to_n_context FMT_DEPRECATED_ALIAS = buffer_context<Char>;
+template <
+    typename S, typename OutputIt, typename... Args,
+    FMT_ENABLE_IF(detail::is_output_iterator<OutputIt>::value &&
+                  !detail::is_contiguous_back_insert_iterator<OutputIt>::value)>
+inline OutputIt vformat_to(
+    OutputIt out, const S& format_str,
+    format_args_t<type_identity_t<OutputIt>, char_t<S>> args) {
+  using af = detail::arg_formatter<OutputIt, char_t<S>>;
+  return vformat_to<af>(out, to_string_view(format_str), args);
+}
+
+/**
+ \rst
+ Formats arguments, writes the result to the output iterator ``out`` and returns
+ the iterator past the end of the output range.
+
+ **Example**::
+
+   std::vector<char> out;
+   fmt::format_to(std::back_inserter(out), "{}", 42);
+ \endrst
+ */
+template <typename OutputIt, typename S, typename... Args,
+          FMT_ENABLE_IF(
+              detail::is_output_iterator<OutputIt>::value &&
+              !detail::is_contiguous_back_insert_iterator<OutputIt>::value &&
+              detail::is_string<S>::value)>
+inline OutputIt format_to(OutputIt out, const S& format_str, Args&&... args) {
+  detail::check_format_string<Args...>(format_str);
+  using context = format_context_t<OutputIt, char_t<S>>;
+  return vformat_to(out, to_string_view(format_str),
+                    make_format_args<context>(args...));
+}
+
+template <typename OutputIt> struct format_to_n_result {
+  /** Iterator past the end of the output range. */
+  OutputIt out;
+  /** Total (not truncated) output size. */
+  size_t size;
+};
 
 template <typename OutputIt, typename Char = typename OutputIt::value_type>
-using format_to_n_args FMT_DEPRECATED_ALIAS =
-    basic_format_args<buffer_context<Char>>;
+using format_to_n_context =
+    format_context_t<detail::truncating_iterator<OutputIt>, Char>;
+
+template <typename OutputIt, typename Char = typename OutputIt::value_type>
+using format_to_n_args = basic_format_args<format_to_n_context<OutputIt, Char>>;
 
 template <typename OutputIt, typename Char, typename... Args>
-FMT_DEPRECATED format_arg_store<buffer_context<Char>, Args...>
+inline format_arg_store<format_to_n_context<OutputIt, Char>, Args...>
 make_format_to_n_args(const Args&... args) {
-  return format_arg_store<buffer_context<Char>, Args...>(args...);
+  return format_arg_store<format_to_n_context<OutputIt, Char>, Args...>(
+      args...);
+}
+
+template <typename OutputIt, typename Char, typename... Args,
+          FMT_ENABLE_IF(detail::is_output_iterator<OutputIt>::value)>
+inline format_to_n_result<OutputIt> vformat_to_n(
+    OutputIt out, size_t n, basic_string_view<Char> format_str,
+    format_to_n_args<type_identity_t<OutputIt>, type_identity_t<Char>> args) {
+  auto it = vformat_to(detail::truncating_iterator<OutputIt>(out, n),
+                       format_str, args);
+  return {it.base(), it.count()};
+}
+
+/**
+ \rst
+ Formats arguments, writes up to ``n`` characters of the result to the output
+ iterator ``out`` and returns the total output size and the iterator past the
+ end of the output range.
+ \endrst
+ */
+template <typename OutputIt, typename S, typename... Args,
+          FMT_ENABLE_IF(detail::is_string<S>::value&&
+                            detail::is_output_iterator<OutputIt>::value)>
+inline format_to_n_result<OutputIt> format_to_n(OutputIt out, size_t n,
+                                                const S& format_str,
+                                                const Args&... args) {
+  detail::check_format_string<Args...>(format_str);
+  using context = format_to_n_context<OutputIt, char_t<S>>;
+  return vformat_to_n(out, n, to_string_view(format_str),
+                      make_format_args<context>(args...));
 }
 
 template <typename Char, enable_if_t<(!std::is_same<Char, char>::value), int>>
@@ -3550,6 +3595,15 @@ std::basic_string<Char> detail::vformat(
   basic_memory_buffer<Char> buffer;
   detail::vformat_to(buffer, format_str, args);
   return to_string(buffer);
+}
+
+/**
+  Returns the number of characters in the output of
+  ``format(format_str, args...)``.
+ */
+template <typename... Args>
+inline size_t formatted_size(string_view format_str, const Args&... args) {
+  return format_to(detail::counting_iterator(), format_str, args...).count();
 }
 
 template <typename Char, FMT_ENABLE_IF(std::is_same<Char, wchar_t>::value)>
@@ -3576,7 +3630,8 @@ template <typename Char, Char... CHARS> class udl_formatter {
   template <typename... Args>
   std::basic_string<Char> operator()(Args&&... args) const {
     static FMT_CONSTEXPR_DECL Char s[] = {CHARS..., '\0'};
-    return format(FMT_STRING(s), std::forward<Args>(args)...);
+    check_format_string<remove_cvref_t<Args>...>(FMT_STRING(s));
+    return format(s, std::forward<Args>(args)...);
   }
 };
 #  else

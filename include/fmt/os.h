@@ -343,32 +343,36 @@ class file {
 // Returns the memory page size.
 long getpagesize();
 
-// A fast output stream which is not thread-safe.
-class ostream : private detail::buffer<char> {
+class direct_buffered_file;
+
+template <typename S, typename... Args>
+void print(direct_buffered_file& f, const S& format_str,
+           const Args&... args);
+
+// A buffered file with a direct buffer access and no synchronization.
+class direct_buffered_file {
  private:
   file file_;
-  char buffer_[BUFSIZ];
+
+  enum { buffer_size = 4096 };
+  char buffer_[buffer_size];
+  int pos_;
 
   void flush() {
-    if (size() == 0) return;
-    file_.write(buffer_, size());
-    clear();
+    if (pos_ == 0) return;
+    file_.write(buffer_, pos_);
+    pos_ = 0;
   }
 
-  void grow(size_t) final;
-
-  ostream(cstring_view path, int oflag)
-      : buffer<char>(buffer_, 0, BUFSIZ), file_(path, oflag) {}
+  int free_capacity() const { return buffer_size - pos_; }
 
  public:
-  ostream(ostream&& other)
-      : buffer<char>(buffer_, 0, BUFSIZ), file_(std::move(other.file_)) {
-    append(other.begin(), other.end());
-    other.clear();
-  }
-  ~ostream() { flush(); }
+  direct_buffered_file(cstring_view path, int oflag)
+    : file_(path, oflag), pos_(0) {}
 
-  friend ostream output_file(cstring_view path, int oflag);
+  ~direct_buffered_file() {
+    flush();
+  }
 
   void close() {
     flush();
@@ -376,15 +380,25 @@ class ostream : private detail::buffer<char> {
   }
 
   template <typename S, typename... Args>
-  void print(const S& format_str, const Args&... args) {
-    format_to(detail::buffer_appender<char>(*this), format_str, args...);
+  friend void print(direct_buffered_file& f, const S& format_str,
+                    const Args&... args) {
+    // We could avoid double buffering.
+    auto buf = fmt::memory_buffer();
+    fmt::format_to(std::back_inserter(buf), format_str, args...);
+    auto remaining_pos = 0;
+    auto remaining_size = buf.size();
+    while (remaining_size > detail::to_unsigned(f.free_capacity())) {
+      auto size = f.free_capacity();
+      memcpy(f.buffer_ + f.pos_, buf.data() + remaining_pos, size);
+      f.pos_ += size;
+      f.flush();
+      remaining_pos += size;
+      remaining_size -= size;
+    }
+    memcpy(f.buffer_ + f.pos_, buf.data() + remaining_pos, remaining_size);
+    f.pos_ += static_cast<int>(remaining_size);
   }
 };
-
-inline ostream output_file(cstring_view path,
-                           int oflag = file::WRONLY | file::CREATE) {
-  return {path, oflag};
-}
 #endif  // FMT_USE_FCNTL
 
 #ifdef FMT_LOCALE
