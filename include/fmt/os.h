@@ -29,7 +29,7 @@
 #if FMT_HAS_INCLUDE("winapifamily.h")
 #  include <winapifamily.h>
 #endif
-#if (FMT_HAS_INCLUDE(<fcntl.h>) || defined(__APPLE__)) && \
+#if FMT_HAS_INCLUDE("fcntl.h") && \
     (!defined(WINAPI_FAMILY) || (WINAPI_FAMILY == WINAPI_FAMILY_DESKTOP_APP))
 #  include <fcntl.h>  // for O_RDONLY
 #  define FMT_USE_FCNTL 1
@@ -343,67 +343,36 @@ class file {
 // Returns the memory page size.
 long getpagesize();
 
-namespace detail {
+class direct_buffered_file;
 
-struct buffer_size {
-  size_t value = 0;
-  buffer_size operator=(size_t val) const {
-    auto bs = buffer_size();
-    bs.value = val;
-    return bs;
-  }
-};
+template <typename S, typename... Args>
+void print(direct_buffered_file& f, const S& format_str,
+           const Args&... args);
 
-struct ostream_params {
-  int oflag = file::WRONLY | file::CREATE;
-  size_t buffer_size = BUFSIZ > 32768 ? BUFSIZ : 32768;
-
-  ostream_params() {}
-
-  template <typename... T>
-  ostream_params(T... params, int oflag) : ostream_params(params...) {
-    this->oflag = oflag;
-  }
-
-  template <typename... T>
-  ostream_params(T... params, detail::buffer_size bs)
-      : ostream_params(params...) {
-    this->buffer_size = bs.value;
-  }
-};
-}  // namespace detail
-
-static constexpr detail::buffer_size buffer_size;
-
-// A fast output stream which is not thread-safe.
-class ostream : private detail::buffer<char> {
+// A buffered file with a direct buffer access and no synchronization.
+class direct_buffered_file {
  private:
   file file_;
 
+  enum { buffer_size = 4096 };
+  char buffer_[buffer_size];
+  int pos_;
+
   void flush() {
-    if (size() == 0) return;
-    file_.write(data(), size());
-    clear();
+    if (pos_ == 0) return;
+    file_.write(buffer_, pos_);
+    pos_ = 0;
   }
 
-  void grow(size_t) final;
-
-  ostream(cstring_view path, const detail::ostream_params& params)
-      : file_(path, params.oflag) {
-    set(new char[params.buffer_size], params.buffer_size);
-  }
+  int free_capacity() const { return buffer_size - pos_; }
 
  public:
-  ostream(ostream&& other) : file_(std::move(other.file_)) {
-    other.set(nullptr, 0);
-  }
-  ~ostream() {
-    flush();
-    delete[] data();
-  }
+  direct_buffered_file(cstring_view path, int oflag)
+    : file_(path, oflag), pos_(0) {}
 
-  template <typename... T>
-  friend ostream output_file(cstring_view path, T... params);
+  ~direct_buffered_file() {
+    flush();
+  }
 
   void close() {
     flush();
@@ -411,20 +380,25 @@ class ostream : private detail::buffer<char> {
   }
 
   template <typename S, typename... Args>
-  void print(const S& format_str, const Args&... args) {
-    format_to(detail::buffer_appender<char>(*this), format_str, args...);
+  friend void print(direct_buffered_file& f, const S& format_str,
+                    const Args&... args) {
+    // We could avoid double buffering.
+    auto buf = fmt::memory_buffer();
+    fmt::format_to(std::back_inserter(buf), format_str, args...);
+    auto remaining_pos = 0;
+    auto remaining_size = buf.size();
+    while (remaining_size > detail::to_unsigned(f.free_capacity())) {
+      auto size = f.free_capacity();
+      memcpy(f.buffer_ + f.pos_, buf.data() + remaining_pos, size);
+      f.pos_ += size;
+      f.flush();
+      remaining_pos += size;
+      remaining_size -= size;
+    }
+    memcpy(f.buffer_ + f.pos_, buf.data() + remaining_pos, remaining_size);
+    f.pos_ += static_cast<int>(remaining_size);
   }
 };
-
-/**
-  Opens a file for writing. Supported parameters passed in `params`:
-  * ``<integer>``: Output flags (``file::WRONLY | file::CREATE`` by default)
-  * ``buffer_size=<integer>``: Output buffer size
- */
-template <typename... T>
-inline ostream output_file(cstring_view path, T... params) {
-  return {path, detail::ostream_params(params...)};
-}
 #endif  // FMT_USE_FCNTL
 
 #ifdef FMT_LOCALE
