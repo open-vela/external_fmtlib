@@ -297,7 +297,7 @@ TEST(MemoryBufferTest, Grow) {
   mock_allocator<int> alloc;
   struct TestMemoryBuffer : Base {
     TestMemoryBuffer(Allocator alloc) : Base(alloc) {}
-    using Base::grow;
+    void grow(size_t size) { Base::grow(size); }
   } buffer((Allocator(&alloc)));
   buffer.resize(7);
   using fmt::detail::to_unsigned;
@@ -543,6 +543,7 @@ TEST(FormatterTest, ManyArgs) {
 TEST(FormatterTest, NamedArg) {
   EXPECT_EQ("1/a/A", format("{_1}/{a_}/{A_}", fmt::arg("a_", 'a'),
                             fmt::arg("A_", "A"), fmt::arg("_1", 1)));
+  EXPECT_THROW_MSG(format("{a}"), format_error, "argument not found");
   EXPECT_EQ(" -42", format("{0:{width}}", -42, fmt::arg("width", 4)));
   EXPECT_EQ("st", format("{0:.{precision}}", "str", fmt::arg("precision", 2)));
   EXPECT_EQ("1 2", format("{} {two}", 1, fmt::arg("two", 2)));
@@ -552,8 +553,6 @@ TEST(FormatterTest, NamedArg) {
                          fmt::arg("i", 0), fmt::arg("j", 0), fmt::arg("k", 0),
                          fmt::arg("l", 0), fmt::arg("m", 0), fmt::arg("n", 0),
                          fmt::arg("o", 0), fmt::arg("p", 0)));
-  EXPECT_THROW_MSG(format("{a}"), format_error, "argument not found");
-  EXPECT_THROW_MSG(format("{a}", 42), format_error, "argument not found");
 }
 
 TEST(FormatterTest, AutoArgIndex) {
@@ -1845,9 +1844,10 @@ class mock_arg_formatter
 };
 
 static void custom_vformat(fmt::string_view format_str, fmt::format_args args) {
-  fmt::memory_buffer buf;
-  fmt::vformat_to<mock_arg_formatter>(fmt::detail::buffer_appender<char>(buf),
-                                      format_str, args);
+  fmt::memory_buffer buffer;
+  fmt::detail::buffer<char>& base = buffer;
+  fmt::vformat_to<mock_arg_formatter>(std::back_inserter(base), format_str,
+                                      args);
 }
 
 template <typename... Args>

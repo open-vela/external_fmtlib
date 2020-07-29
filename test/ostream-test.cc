@@ -75,8 +75,8 @@ struct test_arg_formatter
 
 TEST(OStreamTest, CustomArg) {
   fmt::memory_buffer buffer;
-  fmt::format_context ctx(fmt::detail::buffer_appender<char>{buffer},
-                          fmt::format_args());
+  fmt::detail::buffer<char>& base = buffer;
+  fmt::format_context ctx(std::back_inserter(base), fmt::format_args());
   fmt::format_specs spec;
   test_arg_formatter af(ctx, spec);
   fmt::visit_format_arg(
@@ -151,8 +151,7 @@ TEST(OStreamTest, WriteToOStreamMaxSize) {
   if (max_size <= fmt::detail::to_unsigned(max_streamsize)) return;
 
   struct test_buffer : fmt::detail::buffer<char> {
-    explicit test_buffer(size_t size)
-      : fmt::detail::buffer<char>(nullptr, size, size) {}
+    explicit test_buffer(size_t size) { resize(size); }
     void grow(size_t) {}
   } buffer(max_size);
 
@@ -290,19 +289,8 @@ std::ostream& operator<<(std::ostream& os,
 TEST(OStreamTest, FormatExplicitlyConvertibleToStdStringView) {
   EXPECT_EQ("bar", fmt::format("{}", explicitly_convertible_to_string_like()));
 }
+
 #endif  // FMT_USE_STRING_VIEW
-
-struct streamable_and_convertible_to_bool {
-  operator bool() const { return true; }
-};
-
-std::ostream& operator<<(std::ostream& os, streamable_and_convertible_to_bool) {
-  return os << "foo";
-}
-
-TEST(OStreamTest, FormatConvertibleToBool) {
-  EXPECT_EQ("foo", fmt::format("{}", streamable_and_convertible_to_bool()));
-}
 
 struct copyfmt_test {};
 
