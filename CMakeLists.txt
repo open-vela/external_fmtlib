@@ -1,10 +1,8 @@
-cmake_minimum_required(VERSION 3.1.0)
+cmake_minimum_required(VERSION 3.1...3.18)
 
-# Use newer policies if available, up to most recent tested version of CMake.
-if(${CMAKE_VERSION} VERSION_LESS 3.11)
+# Fallback for using newer policies on CMake <3.12.
+if(${CMAKE_VERSION} VERSION_LESS 3.12)
   cmake_policy(VERSION ${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION})
-else()
-  cmake_policy(VERSION 3.11)
 endif()
 
 # Determine if fmt is built as a subproject (using add_subdirectory)
@@ -109,11 +107,11 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
       -Wold-style-cast -Wundef
       -Wredundant-decls -Wwrite-strings -Wpointer-arith
       -Wcast-qual -Wformat=2 -Wmissing-include-dirs
-      -Wcast-align -Wnon-virtual-dtor
+      -Wcast-align
       -Wctor-dtor-privacy -Wdisabled-optimization
       -Winvalid-pch -Woverloaded-virtual
       -Wconversion -Wswitch-enum
-      -Wno-ctor-dtor-privacy -Wno-format-nonliteral -Wno-shadow)
+      -Wno-ctor-dtor-privacy -Wno-format-nonliteral)
   if (NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.6)
       set(PEDANTIC_COMPILE_FLAGS ${PEDANTIC_COMPILE_FLAGS} -Wnoexcept
          -Wno-dangling-else -Wno-unused-local-typedefs)
