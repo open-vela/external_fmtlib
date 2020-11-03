@@ -219,12 +219,12 @@ TEST(AllocatorTest, allocator_ref) {
   check_forwarding(alloc, ref3);
 }
 
-typedef allocator_ref<std::allocator<char>> TestAllocator;
+typedef allocator_ref<std::allocator<char>> std_allocator;
 
 static void check_move_buffer(
-    const char* str, basic_memory_buffer<char, 5, TestAllocator>& buffer) {
+    const char* str, basic_memory_buffer<char, 5, std_allocator>& buffer) {
   std::allocator<char>* alloc = buffer.get_allocator().get();
-  basic_memory_buffer<char, 5, TestAllocator> buffer2(std::move(buffer));
+  basic_memory_buffer<char, 5, std_allocator> buffer2(std::move(buffer));
   // Move shouldn't destroy the inline content of the first buffer.
   EXPECT_EQ(str, std::string(&buffer[0], buffer.size()));
   EXPECT_EQ(str, std::string(&buffer2[0], buffer2.size()));
@@ -236,7 +236,7 @@ static void check_move_buffer(
 
 TEST(MemoryBufferTest, MoveCtorInlineBuffer) {
   std::allocator<char> alloc;
-  basic_memory_buffer<char, 5, TestAllocator> buffer((TestAllocator(&alloc)));
+  basic_memory_buffer<char, 5, std_allocator> buffer((std_allocator(&alloc)));
   const char test[] = "test";
   buffer.append(string_view(test, 4));
   check_move_buffer("test", buffer);
@@ -248,14 +248,14 @@ TEST(MemoryBufferTest, MoveCtorInlineBuffer) {
 
 TEST(MemoryBufferTest, MoveCtorDynamicBuffer) {
   std::allocator<char> alloc;
-  basic_memory_buffer<char, 4, TestAllocator> buffer((TestAllocator(&alloc)));
+  basic_memory_buffer<char, 4, std_allocator> buffer((std_allocator(&alloc)));
   const char test[] = "test";
   buffer.append(test, test + 4);
   const char* inline_buffer_ptr = &buffer[0];
   // Adding one more character causes the content to move from the inline to
   // a dynamically allocated buffer.
   buffer.push_back('a');
-  basic_memory_buffer<char, 4, TestAllocator> buffer2(std::move(buffer));
+  basic_memory_buffer<char, 4, std_allocator> buffer2(std::move(buffer));
   // Move should rip the guts of the first buffer.
   EXPECT_EQ(inline_buffer_ptr, &buffer[0]);
   EXPECT_EQ("testa", std::string(&buffer2[0], buffer2.size()));
@@ -354,6 +354,53 @@ TEST(MemoryBufferTest, ExceptionInDeallocate) {
   EXPECT_CALL(alloc, deallocate(&mem2[0], 2 * size));
 }
 
+template <typename Allocator, size_t MaxSize>
+class allocator_max_size: public Allocator {
+ public:
+  using typename Allocator::value_type;
+  size_t max_size() const FMT_NOEXCEPT {
+    return MaxSize;
+  }
+  value_type* allocate(size_t n) {
+    if (n > max_size()) {
+      throw std::length_error("size > max_size");
+    }
+    return std::allocator_traits<Allocator>::allocate(
+      *static_cast<Allocator *>(this), n);
+  }
+  void deallocate(value_type* p, size_t n) {
+    std::allocator_traits<Allocator>::deallocate(
+      *static_cast<Allocator *>(this), p, n);
+  }
+};
+
+TEST(MemoryBufferTest, AllocatorMaxSize) {
+  // 160 = 128 + 32
+  using TestAllocator = allocator_max_size<std::allocator<char>, 160>;
+  basic_memory_buffer<char, 10, TestAllocator> buffer;
+  buffer.resize(128);
+  bool throws_on_resize = false;
+  try {
+    // new_capacity = 128 + 128/2 = 192 > 160
+    buffer.resize(160);
+  } catch (const std::exception &) {
+    throws_on_resize = true;
+  }
+  EXPECT_FALSE(throws_on_resize);
+}
+
+TEST(MemoryBufferTest, AllocatorMaxSizeOverflow) {
+  using TestAllocator = allocator_max_size<std::allocator<char>, 160>;
+  basic_memory_buffer<char, 10, TestAllocator> buffer;
+  bool throws_on_resize = false;
+  try {
+    buffer.resize(161);
+  } catch (const std::exception &) {
+    throws_on_resize = true;
+  }
+  EXPECT_TRUE(throws_on_resize);
+}
+
 TEST(UtilTest, UTF8ToUTF16) {
   fmt::detail::utf8_to_utf16 u("лошадка");
   EXPECT_EQ(L"\x043B\x043E\x0448\x0430\x0434\x043A\x0430", u.str());
@@ -399,9 +446,9 @@ TEST(UtilTest, FormatSystemError) {
 }
 
 TEST(UtilTest, SystemError) {
-  fmt::system_error e(EDOM, "test");
-  EXPECT_EQ(fmt::format("test: {}", get_system_error(EDOM)), e.what());
-  EXPECT_EQ(EDOM, e.error_code());
+  fmt::system_error test_error(EDOM, "test");
+  EXPECT_EQ(fmt::format("test: {}", get_system_error(EDOM)), test_error.what());
+  EXPECT_EQ(EDOM, test_error.error_code());
 
   fmt::system_error error(0, "");
   try {
@@ -2052,7 +2099,7 @@ struct test_format_specs_handler {
   enum Result { NONE, PLUS, MINUS, SPACE, HASH, ZERO, ERROR };
   Result res = NONE;
 
-  fmt::align_t align = fmt::align::none;
+  fmt::align_t alignment = fmt::align::none;
   char fill = 0;
   int width = 0;
   fmt::detail::arg_ref<char> width_ref;
@@ -2066,7 +2113,7 @@ struct test_format_specs_handler {
   FMT_CONSTEXPR test_format_specs_handler(
       const test_format_specs_handler& other)
       : res(other.res),
-        align(other.align),
+        alignment(other.alignment),
         fill(other.fill),
         width(other.width),
         width_ref(other.width_ref),
@@ -2074,7 +2121,7 @@ struct test_format_specs_handler {
         precision_ref(other.precision_ref),
         type(other.type) {}
 
-  FMT_CONSTEXPR void on_align(fmt::align_t a) { align = a; }
+  FMT_CONSTEXPR void on_align(fmt::align_t a) { alignment = a; }
   FMT_CONSTEXPR void on_fill(fmt::string_view f) { fill = f[0]; }
   FMT_CONSTEXPR void on_plus() { res = PLUS; }
   FMT_CONSTEXPR void on_minus() { res = MINUS; }
@@ -2106,7 +2153,7 @@ FMT_CONSTEXPR test_format_specs_handler parse_test_specs(const char (&s)[N]) {
 
 TEST(FormatTest, ConstexprParseFormatSpecs) {
   typedef test_format_specs_handler handler;
-  static_assert(parse_test_specs("<").align == fmt::align::left, "");
+  static_assert(parse_test_specs("<").alignment == fmt::align::left, "");
   static_assert(parse_test_specs("*^").fill == '*', "");
   static_assert(parse_test_specs("+").res == handler::PLUS, "");
   static_assert(parse_test_specs("-").res == handler::MINUS, "");
@@ -2217,7 +2264,7 @@ FMT_CONSTEXPR test_format_specs_handler check_specs(const char (&s)[N]) {
 
 TEST(FormatTest, ConstexprSpecsChecker) {
   typedef test_format_specs_handler handler;
-  static_assert(check_specs("<").align == fmt::align::left, "");
+  static_assert(check_specs("<").alignment == fmt::align::left, "");
   static_assert(check_specs("*^").fill == '*', "");
   static_assert(check_specs("+").res == handler::PLUS, "");
   static_assert(check_specs("-").res == handler::MINUS, "");

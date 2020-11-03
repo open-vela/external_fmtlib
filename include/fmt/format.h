@@ -115,7 +115,7 @@ FMT_END_NAMESPACE
 #  else
 #    define FMT_THROW(x)              \
       do {                            \
-        static_cast<void>(sizeof(x)); \
+        static_cast<void>(x); \
         FMT_ASSERT(false, "");        \
       } while (false)
 #  endif
@@ -742,9 +742,13 @@ void basic_memory_buffer<T, SIZE, Allocator>::grow(size_t size) {
 #ifdef FMT_FUZZ
   if (size > 5000) throw std::runtime_error("fuzz mode - won't grow that much");
 #endif
+  const size_t max_size = std::allocator_traits<Allocator>::max_size(alloc_);
   size_t old_capacity = this->capacity();
   size_t new_capacity = old_capacity + old_capacity / 2;
-  if (size > new_capacity) new_capacity = size;
+  if (size > new_capacity)
+    new_capacity = size;
+  else if (new_capacity > max_size)
+    new_capacity = (std::max)(size, max_size);
   T* old_data = this->data();
   T* new_data =
       std::allocator_traits<Allocator>::allocate(alloc_, new_capacity);
@@ -975,13 +979,6 @@ template <> int count_digits<4>(detail::fallback_uintptr n);
 #  define FMT_ALWAYS_INLINE __forceinline
 #else
 #  define FMT_ALWAYS_INLINE inline
-#endif
-
-// To suppress unnecessary security cookie checks
-#if FMT_MSC_VER && !FMT_CLANG_VERSION
-#  define FMT_SAFEBUFFERS __declspec(safebuffers)
-#else
-#  define FMT_SAFEBUFFERS
 #endif
 
 #ifdef FMT_BUILTIN_CLZ
