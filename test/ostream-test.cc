@@ -5,6 +5,7 @@
 //
 // For the license information refer to format.h.
 
+#define FMT_STRING_ALIAS 1
 #include "fmt/format.h"
 
 struct test {};
@@ -23,7 +24,6 @@ template <> struct formatter<test> : formatter<int> {
 #include <sstream>
 
 #include "fmt/ostream.h"
-#include "fmt/ranges.h"
 #include "gmock.h"
 #include "gtest-extra.h"
 #include "util.h"
@@ -97,20 +97,20 @@ TEST(OStreamTest, FormatSpecs) {
   EXPECT_EQ("def  ", format("{0:<5}", TestString("def")));
   EXPECT_EQ("  def", format("{0:>5}", TestString("def")));
 #if FMT_DEPRECATED_NUMERIC_ALIGN
-  EXPECT_THROW_MSG(format(+"{0:=5}", TestString("def")), format_error,
+  EXPECT_THROW_MSG(format("{0:=5}", TestString("def")), format_error,
                    "format specifier requires numeric argument");
 #endif
   EXPECT_EQ(" def ", format("{0:^5}", TestString("def")));
   EXPECT_EQ("def**", format("{0:*<5}", TestString("def")));
-  EXPECT_THROW_MSG(format(+"{0:+}", TestString()), format_error,
+  EXPECT_THROW_MSG(format("{0:+}", TestString()), format_error,
                    "format specifier requires numeric argument");
-  EXPECT_THROW_MSG(format(+"{0:-}", TestString()), format_error,
+  EXPECT_THROW_MSG(format("{0:-}", TestString()), format_error,
                    "format specifier requires numeric argument");
-  EXPECT_THROW_MSG(format(+"{0: }", TestString()), format_error,
+  EXPECT_THROW_MSG(format("{0: }", TestString()), format_error,
                    "format specifier requires numeric argument");
-  EXPECT_THROW_MSG(format(+"{0:#}", TestString()), format_error,
+  EXPECT_THROW_MSG(format("{0:#}", TestString()), format_error,
                    "format specifier requires numeric argument");
-  EXPECT_THROW_MSG(format(+"{0:05}", TestString()), format_error,
+  EXPECT_THROW_MSG(format("{0:05}", TestString()), format_error,
                    "format specifier requires numeric argument");
   EXPECT_EQ("test         ", format("{0:13}", TestString("test")));
   EXPECT_EQ("test         ", format("{0:{1}}", TestString("test"), 13));
@@ -152,7 +152,7 @@ TEST(OStreamTest, WriteToOStreamMaxSize) {
 
   struct test_buffer final : fmt::detail::buffer<char> {
     explicit test_buffer(size_t size)
-        : fmt::detail::buffer<char>(nullptr, size, size) {}
+      : fmt::detail::buffer<char>(nullptr, size, size) {}
     void grow(size_t) {}
   } buffer(max_size);
 
@@ -165,8 +165,7 @@ TEST(OStreamTest, WriteToOStreamMaxSize) {
   } streambuf;
 
   struct test_ostream : std::ostream {
-    explicit test_ostream(mock_streambuf& output_buffer)
-        : std::ostream(&output_buffer) {}
+    explicit test_ostream(mock_streambuf& buffer) : std::ostream(&buffer) {}
   } os(streambuf);
 
   testing::InSequence sequence;
@@ -323,9 +322,4 @@ TEST(OStreamTest, CompileTimeString) {
 
 TEST(OStreamTest, ToString) {
   EXPECT_EQ("ABC", fmt::to_string(fmt_test::ABC()));
-}
-
-TEST(OStreamTest, Range) {
-  auto strs = std::vector<TestString>{TestString("foo"), TestString("bar")};
-  EXPECT_EQ("{foo, bar}", format("{}", strs));
 }

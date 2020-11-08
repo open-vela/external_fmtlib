@@ -10,13 +10,6 @@
 
 #include "format.h"
 
-// __declspec(deprecated) is broken in some MSVC versions.
-#if FMT_MSC_VER
-#  define FMT_DEPRECATED_NONMSVC
-#else
-#  define FMT_DEPRECATED_NONMSVC FMT_DEPRECATED
-#endif
-
 FMT_BEGIN_NAMESPACE
 
 enum class color : uint32_t {
@@ -230,7 +223,7 @@ struct color_type {
 };
 }  // namespace detail
 
-/** A text style consisting of foreground and background colors and emphasis. */
+// Experimental text formatting support.
 class text_style {
  public:
   FMT_CONSTEXPR text_style(emphasis em = emphasis()) FMT_NOEXCEPT
@@ -267,14 +260,33 @@ class text_style {
     return lhs |= rhs;
   }
 
-  FMT_DEPRECATED_NONMSVC FMT_CONSTEXPR text_style& operator&=(
-      const text_style& rhs) {
-    return and_assign(rhs);
+  FMT_CONSTEXPR text_style& operator&=(const text_style& rhs) {
+    if (!set_foreground_color) {
+      set_foreground_color = rhs.set_foreground_color;
+      foreground_color = rhs.foreground_color;
+    } else if (rhs.set_foreground_color) {
+      if (!foreground_color.is_rgb || !rhs.foreground_color.is_rgb)
+        FMT_THROW(format_error("can't AND a terminal color"));
+      foreground_color.value.rgb_color &= rhs.foreground_color.value.rgb_color;
+    }
+
+    if (!set_background_color) {
+      set_background_color = rhs.set_background_color;
+      background_color = rhs.background_color;
+    } else if (rhs.set_background_color) {
+      if (!background_color.is_rgb || !rhs.background_color.is_rgb)
+        FMT_THROW(format_error("can't AND a terminal color"));
+      background_color.value.rgb_color &= rhs.background_color.value.rgb_color;
+    }
+
+    ems = static_cast<emphasis>(static_cast<uint8_t>(ems) &
+                                static_cast<uint8_t>(rhs.ems));
+    return *this;
   }
 
-  FMT_DEPRECATED_NONMSVC friend FMT_CONSTEXPR text_style
-  operator&(text_style lhs, const text_style& rhs) {
-    return lhs.and_assign(rhs);
+  friend FMT_CONSTEXPR text_style operator&(text_style lhs,
+                                            const text_style& rhs) {
+    return lhs &= rhs;
   }
 
   FMT_CONSTEXPR bool has_foreground() const FMT_NOEXCEPT {
@@ -314,34 +326,8 @@ class text_style {
     }
   }
 
-  // DEPRECATED!
-  FMT_CONSTEXPR text_style& and_assign(const text_style& rhs) {
-    if (!set_foreground_color) {
-      set_foreground_color = rhs.set_foreground_color;
-      foreground_color = rhs.foreground_color;
-    } else if (rhs.set_foreground_color) {
-      if (!foreground_color.is_rgb || !rhs.foreground_color.is_rgb)
-        FMT_THROW(format_error("can't AND a terminal color"));
-      foreground_color.value.rgb_color &= rhs.foreground_color.value.rgb_color;
-    }
-
-    if (!set_background_color) {
-      set_background_color = rhs.set_background_color;
-      background_color = rhs.background_color;
-    } else if (rhs.set_background_color) {
-      if (!background_color.is_rgb || !rhs.background_color.is_rgb)
-        FMT_THROW(format_error("can't AND a terminal color"));
-      background_color.value.rgb_color &= rhs.background_color.value.rgb_color;
-    }
-
-    ems = static_cast<emphasis>(static_cast<uint8_t>(ems) &
-                                static_cast<uint8_t>(rhs.ems));
-    return *this;
-  }
-
   friend FMT_CONSTEXPR_DECL text_style fg(detail::color_type foreground)
       FMT_NOEXCEPT;
-
   friend FMT_CONSTEXPR_DECL text_style bg(detail::color_type background)
       FMT_NOEXCEPT;
 
@@ -352,14 +338,12 @@ class text_style {
   emphasis ems;
 };
 
-/** Creates a text style from the foreground (text) color. */
 FMT_CONSTEXPR text_style fg(detail::color_type foreground) FMT_NOEXCEPT {
-  return text_style(true, foreground);
+  return text_style(/*is_foreground=*/true, foreground);
 }
 
-/** Creates a text style from the background color. */
 FMT_CONSTEXPR text_style bg(detail::color_type background) FMT_NOEXCEPT {
-  return text_style(false, background);
+  return text_style(/*is_foreground=*/false, background);
 }
 
 FMT_CONSTEXPR text_style operator|(emphasis lhs, emphasis rhs) FMT_NOEXCEPT {
@@ -539,15 +523,11 @@ void print(std::FILE* f, const text_style& ts, const S& format_str,
 }
 
 /**
-  \rst
   Formats a string and prints it to stdout using ANSI escape sequences to
   specify text formatting.
-
-  **Example**::
-
+  Example:
     fmt::print(fmt::emphasis::bold | fg(fmt::color::red),
                "Elapsed time: {0:.2f} seconds", 1.23);
-  \endrst
  */
 template <typename S, typename... Args,
           FMT_ENABLE_IF(detail::is_string<S>::value)>
