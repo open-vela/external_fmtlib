@@ -9,7 +9,6 @@ gradle/
 gradlew*
 local.properties
 build/
-support/.cxx
 
 bin/
 /_CPack_Packages
