@@ -1,8 +1,14 @@
 {fmt}
 =====
 
-.. image:: https://travis-ci.org/fmtlib/fmt.png?branch=master
-   :target: https://travis-ci.org/fmtlib/fmt
+.. image:: https://github.com/fmtlib/fmt/workflows/linux/badge.svg
+   :target: https://github.com/fmtlib/fmt/actions?query=workflow%3Alinux
+
+.. image:: https://github.com/fmtlib/fmt/workflows/macos/badge.svg
+   :target: https://github.com/fmtlib/fmt/actions?query=workflow%3Amacos
+
+.. image:: https://github.com/fmtlib/fmt/workflows/windows/badge.svg
+   :target: https://github.com/fmtlib/fmt/actions?query=workflow%3Awindows
 
 .. image:: https://ci.appveyor.com/api/projects/status/ehjkiefde6gucy1v
    :target: https://ci.appveyor.com/project/vitaut/fmt
@@ -22,7 +28,7 @@ alternative to C stdio and C++ iostreams.
 
 If you like this project, please consider donating to BYSOL,
 an initiative to help victims of political repressions in Belarus:
-https://www.facebook.com/donate/759400044849707/108388587646909/.
+https://www.facebook.com/donate/988051675049849/.
 
 `Documentation <https://fmt.dev>`__
 
@@ -289,6 +295,8 @@ Projects using this library
 
 * `0 A.D. <https://play0ad.com/>`_: a free, open-source, cross-platform
   real-time strategy game
+
+* `2GIS <https://2gis.ru/>`_: free business listings with a city map
 
 * `AMPL/MP <https://github.com/ampl/mp>`_:
   an open-source library for mathematical programming
