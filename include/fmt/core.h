@@ -104,9 +104,10 @@
 #  define FMT_CONSTEXPR
 #endif
 
-#if ((FMT_CPLUSPLUS >= 202002L) &&                            \
+#if (((FMT_CPLUSPLUS >= 202002L) &&                           \
      (!defined(_GLIBCXX_RELEASE) || _GLIBCXX_RELEASE > 9)) || \
-    (FMT_CPLUSPLUS >= 201709L && FMT_GCC_VERSION >= 1002)
+    (FMT_CPLUSPLUS >= 201709L && FMT_GCC_VERSION >= 1002)) && \
+    (!defined(__NuttX__))
 #  define FMT_CONSTEXPR20 constexpr
 #else
 #  define FMT_CONSTEXPR20
