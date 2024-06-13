@@ -99,10 +99,12 @@ inline bool write_ostream_unicode(std::ostream& os, fmt::string_view data) {
 #endif
   return false;
 }
+#ifndef FMT_NO_WCHAR
 inline bool write_ostream_unicode(std::wostream&,
                                   fmt::basic_string_view<wchar_t>) {
   return false;
 }
+#endif
 
 // Write the content of buf to os.
 // It is a separate function rather than a part of vprint to simplify testing.
@@ -224,6 +226,7 @@ void print(std::ostream& os, format_string<T...> fmt, T&&... args) {
     detail::vprint_directly(os, fmt, vargs);
 }
 
+#ifndef FMT_NO_WCHAR
 FMT_MODULE_EXPORT
 template <typename... Args>
 void print(std::wostream& os,
@@ -231,12 +234,14 @@ void print(std::wostream& os,
            Args&&... args) {
   vprint(os, fmt, fmt::make_format_args<buffer_context<wchar_t>>(args...));
 }
+#endif
 
 FMT_MODULE_EXPORT template <typename... T>
 void println(std::ostream& os, format_string<T...> fmt, T&&... args) {
   print(os, "{}\n", fmt::format(fmt, std::forward<T>(args)...));
 }
 
+#ifndef FMT_NO_WCHAR
 FMT_MODULE_EXPORT
 template <typename... Args>
 void println(std::wostream& os,
@@ -244,6 +249,7 @@ void println(std::wostream& os,
              Args&&... args) {
   print(os, L"{}\n", fmt::format(fmt, std::forward<Args>(args)...));
 }
+#endif
 
 FMT_END_NAMESPACE
 

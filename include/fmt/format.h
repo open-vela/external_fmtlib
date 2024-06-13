@@ -1374,7 +1374,9 @@ class utf8_to_utf16 {
   operator basic_string_view<wchar_t>() const { return {&buffer_[0], size()}; }
   auto size() const -> size_t { return buffer_.size() - 1; }
   auto c_str() const -> const wchar_t* { return &buffer_[0]; }
+#ifndef FMT_NO_WCHAR
   auto str() const -> std::wstring { return {&buffer_[0], size()}; }
+#endif
 };
 
 // Computes 128-bit result of multiplication of two 64-bit unsigned integers.
